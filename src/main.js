@@ -159,7 +159,7 @@ function runCommand(event, command, args, options = {}) {
 
   return new Promise((resolve, reject) => {
     const child = spawn(spawnSpec.command, spawnSpec.args, {
-      shell: false,
+      shell: spawnSpec.shell,
       cwd: options.cwd || undefined,
       env: spawnSpec.env
     });
@@ -191,7 +191,7 @@ function captureCommand(event, command, args, options = {}) {
 
   return new Promise((resolve, reject) => {
     const child = spawn(spawnSpec.command, spawnSpec.args, {
-      shell: false,
+      shell: spawnSpec.shell,
       cwd: options.cwd || undefined,
       env: spawnSpec.env
     });
@@ -249,6 +249,7 @@ function resolveSpawnSpec(command, args) {
       command: process.execPath,
       args: ["--require", sshCompatPatch, command, ...args],
       displayCommand: command,
+      shell: false,
       env: {
         ...process.env,
         ELECTRON_RUN_AS_NODE: "1"
@@ -260,6 +261,7 @@ function resolveSpawnSpec(command, args) {
     command,
     args,
     displayCommand: command,
+    shell: isWindows && /\.(?:bat|cmd)$/i.test(String(command)),
     env: process.env
   };
 }
@@ -712,7 +714,7 @@ async function connectSamsungTransport(event, ip) {
 async function connectSamsungSdbTransport(event, ip) {
   const sdb = await resolveCommand("sdb");
   if (!sdb) {
-    throw new Error("Samsung sdb fallback is not available on this Mac because sdb was not found. Direct Samsung install failed before fallback. Check the vd_appinstall error shown above, or install Samsung/Tizen sdb if you want fallback install/uninstall.");
+    throw new Error("Samsung sdb fallback is not available on this computer because sdb was not found. Direct Samsung install failed before fallback. Check the vd_appinstall error shown above, or install Samsung/Tizen sdb if you want fallback install/uninstall.");
   }
 
   const target = await connectSamsungDevice(event, sdb, ip);
@@ -978,7 +980,7 @@ function isSamsungCertificateRejection(value) {
     return false;
   }
   const output = String(value?.stdout || "") + "\n" + String(value?.stderr || "") + "\n" + String(value?.message || value || "");
-  return /install failed\s*\[\s*118(?:\s*,[^\]]*)?\s*\]/i.test(output)
+  return /install failed\s*\[\s*(?:118012|118(?:\s*,[^\]]*)?)\s*\]/i.test(output)
     || /check certificate error/i.test(output)
     || /invalid certificate chain/i.test(output)
     || /Samsung TV rejected the signed package/i.test(output);
@@ -992,15 +994,79 @@ function isSamsungPlatformIncompatibility(value) {
   return /install failed\s*\[\s*(?:118019|118\s*,\s*-?19)\s*\]/i.test(output);
 }
 
-function samsungPlatformIncompatibilityError(requiredVersion = "") {
+function parseTizenVersion(value) {
+  const match = String(value || "").match(/\b(\d+)(?:\.(\d+))?(?:\.(\d+))?\b/);
+  if (!match) {
+    return [];
+  }
+  return [Number(match[1]), Number(match[2] || 0), Number(match[3] || 0)];
+}
+
+function compareTizenVersions(left, right) {
+  const leftParts = parseTizenVersion(left);
+  const rightParts = parseTizenVersion(right);
+  if (leftParts.length === 0 || rightParts.length === 0) {
+    return null;
+  }
+  for (let index = 0; index < 3; index += 1) {
+    if (leftParts[index] !== rightParts[index]) {
+      return leftParts[index] > rightParts[index] ? 1 : -1;
+    }
+  }
+  return 0;
+}
+
+function extractSamsungPlatformVersion(output) {
+  const match = String(output || "").match(/(?:^|\n)\s*platform_version\s*[:=]\s*([^\s\r\n]+)/i);
+  return match ? match[1].trim() : "";
+}
+
+async function readSamsungPlatformVersion(event, transport) {
+  try {
+    const result = transport.type === "sdb"
+      ? await captureCommand(event, transport.sdb, ["-s", transport.target, "capability"], { timeoutMs: 10000 })
+      : await captureSamsungShell(event, transport, ["0", "capability"], { timeoutMs: 10000 });
+    return extractSamsungPlatformVersion(result.stdout);
+  } catch (error) {
+    emit(event, {
+      type: "info",
+      text: `Samsung platform capability check was unavailable; continuing with package validation. ${error?.message || String(error)}`
+    });
+    return "";
+  }
+}
+
+async function validateSamsungPlatformVersion(event, transport, requiredVersion) {
+  if (!requiredVersion) {
+    return;
+  }
+
+  const actualVersion = await readSamsungPlatformVersion(event, transport);
+  if (!actualVersion) {
+    emit(event, {
+      type: "info",
+      text: "Samsung TV did not expose platform_version; the installer will continue without guessing the TV version."
+    });
+    return;
+  }
+
+  if (compareTizenVersions(actualVersion, requiredVersion) < 0) {
+    throw samsungPlatformIncompatibilityError(requiredVersion, actualVersion);
+  }
+
+  emit(event, { type: "info", text: `Samsung TV reports Tizen ${actualVersion}; package requires Tizen ${requiredVersion} or later.` });
+}
+
+function samsungPlatformIncompatibilityError(requiredVersion = "", actualVersion = "") {
   const modelRange = requiredVersion === "5.0" ? " (Samsung TVs from 2019 onward)" : "";
   const requirement = requiredVersion
     ? `This package requires Tizen ${requiredVersion} or later${modelRange}. `
     : "This package requires a newer Samsung Tizen version. ";
+  const detected = actualVersion ? ` The TV reported Tizen ${actualVersion}.` : "";
   const error = new Error(
     "This Samsung TV is not compatible with this Nuvio package. " +
     requirement +
-    "The standalone WGT cannot be installed on this TV; use the TizenBrew wrapper on older models."
+    `The standalone WGT was not installed.${detected}`
   );
   error.code = "SAMSUNG_UNSUPPORTED_PLATFORM";
   return error;
@@ -1021,7 +1087,7 @@ function throwIfSamsungOutputFailed(output, context) {
       throw new Error(
         `${context}: ${failedLine}\n\nSamsung TV rejected the signed package. ` +
         "The installer will retry any previous signing identities saved for this TV DUID. " +
-        "If none match, the original author certificate used for the installed app is no longer available."
+        "The failure can indicate an invalid certificate chain, a DUID mismatch, or a signing profile with insufficient privileges."
       );
     }
     throw new Error(`${context}: ${failedLine}`);
@@ -1705,7 +1771,9 @@ async function signTizenPackageWithStudioProfile(event, packagePath, profileName
 
 async function prepareSamsungPackage(event, transport, packagePath, options = {}) {
   packagePath = await normalizeSamsungPackageMetadata(event, packagePath);
-  emit(event, { type: "info", text: "Skipping local Tizen P2P Web Service validation for Samsung install test." });
+  const metadata = await parseTizenPackageMetadata(packagePath);
+  await validateSamsungPlatformVersion(event, transport, metadata.requiredVersion);
+  await validateSamsungEngineFsWebServicePackage(event, packagePath);
   const certificateSelection = await getSamsungCertificateCandidates(event, transport, options);
   return { packagePath, ...certificateSelection };
 }
@@ -1784,6 +1852,9 @@ async function installSamsungPackage(event, transport, packagePath) {
     } catch (error) {
       if (isSamsungPlatformIncompatibility(error)) {
         throw samsungPlatformIncompatibilityError(metadata.requiredVersion);
+      }
+      if (isSamsungCertificateRejection(error)) {
+        throw error;
       }
       lastError = error;
       emit(event, {
@@ -1933,7 +2004,7 @@ async function runSamsung(event, action, options) {
         throw new Error(
           `${directInstallError.message}\n\n` +
           `Tried ${preparedPackage.candidates.length} saved signing ${preparedPackage.candidates.length === 1 ? "identity" : "identities"} for this TV. ` +
-          "None matched the author certificate of the installed application."
+          "The TV did not accept any available signing identity. Keep the working author certificate for future updates and, if this is a new installation, verify the Samsung certificate/profile and TV DUID."
         );
       }
 

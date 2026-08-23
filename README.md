@@ -1,62 +1,41 @@
-# Nuvio WebTV Installer
+<div align="center">
 
-Desktop app to install, update, launch, and uninstall Nuvio on:
+  <img src="logo/nuvio_wordmark.png" alt="Nuvio" width="300" />
 
-- Samsung Tizen TVs
-- LG webOS TVs
+  <p>
+    The desktop companion for installing Nuvio WebTV on Samsung Tizen and LG webOS.
+    <br />
+    Download, sign, install, update, launch, and remove the TV app from one place.
+  </p>
 
-For Samsung, the flow is designed as a Nuvio version of TizenBrewInstaller: the installed package is the Nuvio WGT published in the GitHub release.
+[Website](https://nuvio.tv) · [Nuvio WebTV](https://github.com/NuvioMedia/NuvioWeb) · [Android TV](https://github.com/NuvioMedia/NuvioTV) · [Releases](https://github.com/NuvioMedia/NuvioWebTVInstaller/releases) · [Support Nuvio](https://nuvio.tv/support)
 
-The app automatically downloads the latest Nuvio package from the GitHub release configured in `installer.config.json`.
+</div>
 
-Available actions in the app:
+## Get the installer
 
-- `Install / Update`: uses the same flow for first installation and updates. Downloads the latest GitHub release.
-- `Launch`: opens Nuvio on the TV.
-- `Uninstall`: removes Nuvio from the TV.
+Download a packaged build from the [installer releases](https://github.com/NuvioMedia/NuvioWebTVInstaller/releases):
 
-## Start
+- Windows portable executable
+- macOS application
+- Linux AppImage
 
-For development:
+The installer reads the release configuration from `installer.config.json`, downloads the matching `.wgt` or `.ipk` asset from the Nuvio WebTV repository, and provides these actions:
 
-```bash
-npm install
-npm start
-```
+- `Install / Update`
+- `Launch`
+- `Uninstall`
 
-To build the package:
+## Supported TVs
 
-```bash
-npm run dist:win
-npm run dist:mac
-npm run dist:linux
-```
+- **Samsung Tizen 4+** — standalone WGT installation through Developer Mode.
+- **LG webOS 5+** — installation through the official webOS Developer Mode tools.
 
-With the current configuration, standalone runnable apps are generated without an installer:
+The Nuvio WebTV package uses the bundled local companion service where the TV platform supports it. No external torrent or streaming server is configured or required. The installer never permits a Samsung installation or update when the WGT does not contain the required local service.
 
-- `dist/Nuvio-WebTV-Installer-<version>-Windows.exe` for Windows
-- `dist/mac-arm64/Nuvio WebTV Installer.app` for macOS Apple Silicon
-- `dist/Nuvio-WebTV-Installer-<version>-Linux.AppImage` for Linux x64
+## Use it
 
-## App Packages
-
-LG uses an `.ipk` file.
-
-Samsung uses a `.wgt` file. Tizen Studio is not strictly required to create the Nuvio WGT. From the main repo, you can generate it with:
-
-```bash
-npm run package:tizen
-```
-
-The generated WGT uses the web repo's local `local.properties` to generate the runtime env script.
-For Samsung P2P playback, the WGT must also include the local Tizen Web Service: `http://tizen.org/feature/web.service`, `services/tizen/enginefs-service.js`, and `services/tizen/runtime/media-http.cjs`. The installer checks these before signing and installing the package.
-
-The installer automatically downloads the correct asset from the latest GitHub release:
-
-- `.ipk` for LG
-- `.wgt` for Samsung
-
-## Samsung TV
+### Samsung Tizen
 
 Before using the installer:
 
@@ -66,75 +45,36 @@ Before using the installer:
 4. Enter the computer IP as `Host PC IP`.
 5. Restart the TV.
 
-For Samsung, the installer first tries the direct connection used by TizenBrewInstaller, without requiring `sdb` to be installed on the PC. If the direct connection fails, it tries `sdb` as a fallback when available.
+The installer first attempts the direct Samsung Developer Mode connection. If that is unavailable, it uses `sdb` when it is installed on the computer; the `tizen` CLI can be used as a later fallback for compatible setups.
 
-The `tizen` command is not required for the main flow.
+For every Samsung install or update, the installer:
 
-The installer tries to:
+1. downloads the selected WGT;
+2. verifies `config.xml`, the declared Tizen version, and the local EngineFS Web Service;
+3. reads or creates the Samsung certificate for the TV DUID;
+4. signs the WGT locally;
+5. uploads and installs it with `vd_appinstall`.
 
-1. connect directly to the TV in Developer Mode;
-2. download and copy the Nuvio WGT to the TV;
-3. install it with `vd_appinstall`, like TizenBrew/TizenBrewInstaller;
-4. use `sdb` or `tizen` fallbacks only when available.
+The package is rejected before signing if any of these service requirements is missing:
 
-Some Samsung TVs close generic shell setup commands such as `mkdir` or `ls` with
-`closed`, while still accepting a direct WGT upload and `vd_appinstall`. When
-that happens, the installer skips the optional shell setup/checks and continues
-with the direct upload path.
+- `http://tizen.org/feature/web.service` in `config.xml`;
+- `services/tizen/enginefs-service.js`;
+- `services/tizen/runtime/media-http.cjs`;
+- a `tizen:service` entry pointing to `services/tizen/enginefs-service.js`.
 
-If Samsung rejects the WGT with platform error `118019`, the installer reports
-that the TV is incompatible and shows the minimum Tizen version declared by the
-package. It does not attempt the SDB fallback because that cannot bypass the
-package's platform requirement. Older Samsung models can continue to use the
-TizenBrew wrapper when available.
+The installer does not bypass Samsung certificate or platform checks. A Samsung certificate error such as `118012` means that the TV rejected the signed package; the installer can retry identities previously saved for that TV DUID, but it does not replace the certificate with an unrelated identity or use an unsupported wrapper.
 
-Manual equivalent for affected TVs:
-
-```sh
-sdb connect <tv-ip>:26101
-sdb -s <tv-ip>:26101 push /absolute/path/to/signed.wgt /home/owner/share/tmp/sdk_tools/signed.wgt
-sdb -s <tv-ip>:26101 shell 0 vd_appinstall NuvioTV001.NuvioTV /home/owner/share/tmp/sdk_tools/signed.wgt
-```
-
-### Samsung Signing
-
-The installer uses the same approach as TizenBrewInstaller:
-
-- reads the TV DUID;
-- opens Samsung Account login on first use and uses the internet to create the certificate;
-- creates a Samsung certificate for that TV;
-- saves the certificate in the app data folder, keyed by the TV DUID rather than its network address;
-- automatically re-signs the `.wgt` before installing it.
-
-You do not need to provide manual `.p12` files.
-
-The author certificate must remain the same for every update of an installed
-application. The installer migrates older IP-based certificate files, so a DHCP
-address change does not create a new signing identity. If older versions of the
-installer already created multiple identities for the same TV, an update rejected
-with Samsung error `118/-12` is retried with the previous identities saved for that
-DUID. The identity accepted by the TV becomes the canonical identity for future
-updates.
-
-Keep the app data folder backed up. If every copy of the author certificate used
-for the installed application is lost, Samsung does not allow an in-place update;
-the application must be removed and installed again.
-
-## LG TV
-
-For LG, the app includes `@webos-tools/cli`, so the user does not need to manually install the LG webOS SDK CLI or `ares-install`.
+### LG webOS
 
 Before using the installer:
 
-1. Install and open the `Developer Mode` app on the LG TV.
-2. Enable Developer Mode.
+1. Install and open the `Developer Mode` app on the TV.
+2. Enable `Developer Mode`.
 3. Enable `Key Server`.
-4. Read the passphrase shown by the Developer Mode app.
-5. In the installer, select `LG TV`, enter the IP and passphrase, then press `Install / Update`.
+4. Copy the passphrase shown by the Developer Mode app.
+5. Select `LG TV` in the installer, enter the TV IP and passphrase, then press `Install / Update`.
 
-The LG device name is optional. If you leave it empty, the installer automatically creates a local device from the TV IP.
-
-The app internally uses:
+The device name is optional. The installer creates or updates a local webOS device profile and uses the official commands provided by `@webos-tools/cli`:
 
 ```text
 ares-setup-device
@@ -143,15 +83,57 @@ ares-install
 ares-launch
 ```
 
-If the TV was already configured in the past, you can also enter only the device name or IP and leave the passphrase empty.
-If both the LG IP and device name are empty, the installer uses the saved default webOS device profile when one is available.
-If you enter an existing LG device name with a new TV IP, the installer updates that local webOS device profile before installing.
+If a usable profile already exists, the installer can reuse it. Entering a new IP for an existing device name updates that profile before installation.
 
-Note: `@webos-tools/cli` brings many transitive npm dependencies. This does not mean the app is automatically dangerous, but it increases maintenance, package size, and the chance of antivirus false positives. For clean public distribution, app signing is still recommended.
+## TV package contract
 
-## GitHub Configuration
+The GitHub release workflow publishes the installer input packages together:
 
-Edit `installer.config.json`:
+- `package:tizen` creates the unsigned WGT used by development and this installer;
+- `package:webos` creates the installable LG IPK;
+- `package:tizen:store` is a separate Samsung Seller Office build that requires an official Tizen security profile.
+
+The unsigned Samsung WGT is intentional: the installer must sign it locally with the author certificate associated with the target TV DUID. Do not replace it with a Store-signed package. Keeping the installer WGT separate preserves both local Developer Mode installation and the Store publication flow.
+
+For Samsung P2P playback, the WGT generated by the WebTV repository must be built with the local EngineFS service included. The installer validates this contract before it creates a certificate or attempts installation.
+
+## Build from source
+
+```bash
+git clone https://github.com/NuvioMedia/NuvioWebTVInstaller.git
+cd NuvioWebTVInstaller
+npm install
+npm start
+```
+
+Run the available checks with:
+
+```bash
+npm test
+```
+
+Build standalone desktop packages with:
+
+```bash
+npm run dist:win
+npm run dist:mac
+npm run dist:linux
+```
+
+The TV packages themselves are built in the [Nuvio WebTV repository](https://github.com/NuvioMedia/NuvioWeb):
+
+```bash
+npm install
+npm run build
+npm run package:tizen
+npm run package:webos
+```
+
+The WebTV build reads runtime values from its local `local.properties`; credentials and private runtime configuration must not be committed. Store packaging uses the separate `package:tizen:store` command and does not change the WGT contract consumed by this installer.
+
+## Configuration
+
+The default `installer.config.json` points to the Nuvio WebTV release assets:
 
 ```json
 {
@@ -161,24 +143,27 @@ Edit `installer.config.json`:
     "assetPattern": "\\.ipk$"
   },
   "tizen": {
-    "appId": "NuvioTV.NuvioTV",
-    "packageId": "NuvioTV",
-    "appIds": ["NuvioTV.NuvioTV", "NuvioTV"],
+    "appId": "NuvioTV001.NuvioTV",
+    "packageId": "NuvioTV001",
+    "appIds": [
+      "NuvioTV001.NuvioTV",
+      "NuvioTV001",
+      "NuvioTV001.Nuvio",
+      "Nuvio",
+      "NuvioTV.NuvioTV",
+      "NuvioTV"
+    ],
     "assetPattern": "\\.wgt$"
   }
 }
 ```
 
-The GitHub release must contain at least:
+## Security and distribution
 
-- one `.ipk` asset for LG;
-- one `.wgt` asset for Samsung.
+Samsung certificates are stored in the application data directory and are keyed by TV DUID. Back up that directory: losing the author certificate used by an installed app can prevent in-place updates.
 
-## Antivirus Notes
+For public desktop distribution, code-signing the Windows executable and macOS application is recommended. Electron and the bundled webOS CLI contain transitive dependencies, so clean reproducible builds and dependency updates also help reduce antivirus false positives.
 
-No tool can guarantee that an exe will never be flagged. To reduce false positives:
+## License
 
-- sign the exe with a code-signing certificate;
-- avoid dynamic downloads of unnecessary tools;
-- publish reproducible builds from a clean repo;
-- do not include vulnerable npm dependencies unless they are truly needed.
+[GNU General Public License v3.0](./LICENSE)
