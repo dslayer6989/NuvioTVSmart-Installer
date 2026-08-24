@@ -8,7 +8,7 @@
     Download, sign, install, update, launch, and remove the TV app from one place.
   </p>
 
-[Website](https://nuvio.tv) · [Nuvio TV](https://github.com/NuvioMedia/NuvioWeb) · [Android TV](https://github.com/NuvioMedia/NuvioTV) · [Releases](https://github.com/NuvioMedia/NuvioTVSmart-Installer/releases) · [Support Nuvio](https://nuvio.tv/support)
+[Website](https://nuvio.tv) · [Nuvio TV](https://github.com/NuvioMedia/NuvioTVSmart) · [Android TV](https://github.com/NuvioMedia/NuvioTV) · [Releases](https://github.com/NuvioMedia/NuvioTVSmart-Installer/releases) · [Support Nuvio](https://nuvio.tv/support)
 
 </div>
 
@@ -120,7 +120,7 @@ npm run dist:mac
 npm run dist:linux
 ```
 
-The TV packages themselves are built in the [Nuvio TV repository](https://github.com/NuvioMedia/NuvioWeb):
+The TV packages themselves are built in the [Nuvio TV repository](https://github.com/NuvioMedia/NuvioTVSmart):
 
 ```bash
 npm install
@@ -137,7 +137,7 @@ The default `installer.config.json` points to the Nuvio TV release assets:
 
 ```json
 {
-  "githubRepo": "NuvioMedia/NuvioWeb",
+  "githubRepo": "NuvioMedia/NuvioTVSmart",
   "webos": {
     "appId": "space.nuvio.webos",
     "assetPattern": "\\.ipk$"
