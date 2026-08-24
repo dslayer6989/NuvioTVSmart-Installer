@@ -1,5 +1,5 @@
 {
-  "name": "nuvio-web-tv-installer",
+  "name": "nuvio-tv-installer",
   "version": "0.1.0",
   "private": true,
   "description": "Desktop installer for Nuvio TV webOS and Samsung Tizen builds.",
@@ -27,7 +27,7 @@
   },
   "build": {
     "appId": "space.nuvio.webtvinstaller",
-    "productName": "Nuvio WebTV Installer",
+    "productName": "Nuvio TV Installer",
     "icon": "icon.png",
     "asar": true,
     "npmRebuild": false,
@@ -53,7 +53,7 @@
       ]
     },
     "portable": {
-      "artifactName": "Nuvio-WebTV-Installer-${version}-Windows.${ext}"
+      "artifactName": "NuvioTVSmart-Installer-${version}-Windows.${ext}"
     },
     "mac": {
       "icon": "icon.icns",
@@ -76,7 +76,7 @@
       ]
     },
     "appImage": {
-      "artifactName": "Nuvio-WebTV-Installer-${version}-Linux.${ext}"
+      "artifactName": "NuvioTVSmart-Installer-${version}-Linux.${ext}"
     }
   }
 }

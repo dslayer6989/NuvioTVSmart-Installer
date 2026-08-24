@@ -19,7 +19,7 @@ const { Signature, SamsungCertificateCreator } = require("tizen");
 const configPath = path.join(__dirname, "..", "installer.config.json");
 const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
 
-const appDisplayName = "Nuvio WebTV Installer";
+const appDisplayName = "Nuvio TV Installer";
 const isWindows = process.platform === "win32";
 const appIconPath = path.join(__dirname, "..", "build", "icon.png");
 const adbCommands = AdbPacket.commands;
