@@ -20,9 +20,11 @@ const configPath = path.join(__dirname, "..", "installer.config.json");
 const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
 
 const appDisplayName = "Nuvio TV Installer";
+const legacyUserDataNames = ["Nuvio WebTV Installer"];
 const isWindows = process.platform === "win32";
 const appIconPath = path.join(__dirname, "..", "build", "icon.png");
 const adbCommands = AdbPacket.commands;
+let migratedLegacySamsungCertificateCount = 0;
 
 app.setName(appDisplayName);
 if (isWindows) {
@@ -47,7 +49,10 @@ function createWindow() {
   win.loadFile(path.join(__dirname, "renderer", "index.html"));
 }
 
-app.whenReady().then(createWindow);
+app.whenReady().then(async () => {
+  await migrateLegacySamsungCertificateStore();
+  createWindow();
+});
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") {
@@ -1096,8 +1101,68 @@ function throwIfSamsungOutputFailed(output, context) {
 
 const samsungPackageCommandCompletePattern = /spend time|install failed|uninstall failed|download failed|check certificate error|invalid certificate chain/i;
 
-function getSamsungCertificateDirectory() {
-  return path.join(app.getPath("userData"), "samsung-certificates");
+function getSamsungCertificateDirectory(userDataPath = app.getPath("userData")) {
+  return path.join(userDataPath, "samsung-certificates");
+}
+
+async function copyLegacySamsungCertificateStore(sourceDirectory, targetDirectory) {
+  let entries;
+  try {
+    entries = await fsp.readdir(sourceDirectory, { withFileTypes: true });
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      return 0;
+    }
+    throw error;
+  }
+
+  const certificateEntries = entries.filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith(".json"));
+  if (certificateEntries.length === 0) {
+    return 0;
+  }
+
+  await fsp.mkdir(targetDirectory, { recursive: true });
+  let copiedCount = 0;
+  for (const entry of certificateEntries) {
+    const sourcePath = path.join(sourceDirectory, entry.name);
+    const targetPath = path.join(targetDirectory, `legacy-${entry.name}`);
+    try {
+      await fsp.copyFile(sourcePath, targetPath, fs.constants.COPYFILE_EXCL);
+      await fsp.chmod(targetPath, 0o600).catch(() => {});
+      copiedCount += 1;
+    } catch (error) {
+      if (error?.code !== "EEXIST") {
+        throw error;
+      }
+    }
+  }
+
+  return copiedCount;
+}
+
+async function migrateLegacySamsungCertificateStore() {
+  const currentUserDataPath = path.resolve(app.getPath("userData"));
+  const targetDirectory = getSamsungCertificateDirectory(currentUserDataPath);
+  let copiedCount = 0;
+
+  for (const legacyUserDataName of legacyUserDataNames) {
+    const legacyUserDataPath = path.resolve(app.getPath("appData"), legacyUserDataName);
+    if (legacyUserDataPath === currentUserDataPath) {
+      continue;
+    }
+
+    try {
+      copiedCount += await copyLegacySamsungCertificateStore(
+        getSamsungCertificateDirectory(legacyUserDataPath),
+        targetDirectory
+      );
+    } catch (error) {
+      console.warn(`Unable to migrate Samsung certificates from ${legacyUserDataPath}: ${error?.message || String(error)}`);
+    }
+  }
+
+  migratedLegacySamsungCertificateCount = copiedCount;
+  return copiedCount;
 }
 
 function getSamsungCertificateConfigPath(target) {
@@ -1463,6 +1528,12 @@ async function getSamsungCertificateCandidates(event, transport, options = {}) {
   }
 
   const duid = await getSamsungDuid(event, transport);
+  if (migratedLegacySamsungCertificateCount > 0) {
+    emit(event, {
+      type: "info",
+      text: `Recovered ${migratedLegacySamsungCertificateCount} Samsung signing identity file${migratedLegacySamsungCertificateCount === 1 ? "" : "s"} from the previous Nuvio WebTV Installer data folder.`
+    });
+  }
   const candidates = await readSamsungCertificateCandidates(duid, transport.target);
   if (candidates.length > 0) {
     emit(event, {
