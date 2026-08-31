@@ -6,7 +6,6 @@
   "author": "NuvioMedia",
   "main": "src/main.js",
   "scripts": {
-    "test": "node --test test/*.test.js",
     "start": "electron .",
     "dist": "electron-builder",
     "dist:win": "electron-builder --win --publish never",

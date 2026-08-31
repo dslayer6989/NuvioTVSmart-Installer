@@ -2209,15 +2209,3 @@ ipcMain.handle("installer:copyText", async (_event, text) => {
   clipboard.writeText(String(text || ""));
   return true;
 });
-
-if (process.env.NUVIO_INSTALLER_TEST === "1") {
-  module.exports = {
-    getSamsungCertificateDuidConfigPath,
-    getSamsungCertificateFingerprint,
-    isSamsungCertificateRejection,
-    isSamsungPlatformIncompatibility,
-    readSamsungCertificateCandidates,
-    samsungPlatformIncompatibilityError,
-    writeSamsungCertificateConfigFile
-  };
-}
