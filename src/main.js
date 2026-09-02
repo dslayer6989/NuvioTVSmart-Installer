@@ -1656,6 +1656,85 @@ async function validateSamsungEngineFsWebServicePackage(event, packagePath) {
   emit(event, { type: "info", text: "Samsung WGT includes the local Tizen P2P Web Service." });
 }
 
+async function validateSamsungPluginWebServicePackage(event, packagePath) {
+  const zip = await JSZip.loadAsync(fs.readFileSync(packagePath));
+  const configFile = zip.files["config.xml"];
+  const mainFile = zip.files["main.js"];
+  if (!configFile || !mainFile) {
+    return;
+  }
+
+  const mainJs = await mainFile.async("string");
+  const hasPluginFiles = [
+    "services/tizen/plugin-service.js",
+    "services/plugin-http.cjs",
+    "services/tizen/wrt-service-bridge.js"
+  ].some((filename) => zip.files[filename] && !zip.files[filename].dir);
+  const pluginEnabled = /__NUVIO_TIZEN_PLUGIN_SERVICE_ENABLED__\s*=\s*true\b/.test(mainJs);
+  if (!pluginEnabled && !hasPluginFiles) {
+    return;
+  }
+
+  const missing = [];
+  [
+    "services/tizen/plugin-service.js",
+    "services/plugin-http.cjs",
+    "services/tizen/wrt-service-bridge.js"
+  ].forEach((filename) => {
+    if (!zip.files[filename] || zip.files[filename].dir) {
+      missing.push(filename);
+    }
+  });
+
+  const xml = await configFile.async("string");
+  const doc = new DOMParser().parseFromString(xml, "text/xml");
+  const application = doc.getElementsByTagName("tizen:application")[0]
+    || doc.getElementsByTagNameNS("http://tizen.org/ns/widgets", "application")[0];
+  const packageId = application?.getAttribute("package") || "";
+  const features = elementsByTagName(doc, "feature", "http://www.w3.org/ns/widgets", "feature");
+  if (!features.some((feature) => feature.getAttribute("name") === "http://tizen.org/feature/web.service")) {
+    missing.push("config.xml feature http://tizen.org/feature/web.service");
+  }
+
+  const privileges = elementsByTagName(doc, "tizen:privilege", "http://tizen.org/ns/widgets", "privilege");
+  if (!privileges.some((privilege) => privilege.getAttribute("name") === "http://tizen.org/privilege/application.launch")) {
+    missing.push("config.xml privilege http://tizen.org/privilege/application.launch");
+  }
+
+  const services = elementsByTagName(doc, "tizen:service", "http://tizen.org/ns/widgets", "service");
+  const hasPluginService = services.some((service) => {
+    const contents = elementsByTagName(service, "tizen:content", "http://tizen.org/ns/widgets", "content");
+    return service.getAttribute("id") === `${packageId}.PluginService`
+      && contents.some((content) => content.getAttribute("src") === "services/tizen/plugin-service.js");
+  });
+  if (!hasPluginService) {
+    missing.push(`config.xml tizen:service -> ${packageId}.PluginService`);
+  }
+
+  if (!/<script\s+type=["']module["']\s+src=["']services\/tizen\/wrt-service-bridge\.js["']/i.test(
+    await zip.files["index.html"]?.async("string") || ""
+  )) {
+    missing.push("index.html wrt:service module bridge");
+  }
+  if (!/__NUVIO_TIZEN_PLUGIN_SERVICE_ENABLED__\s*=\s*true\b/.test(mainJs)) {
+    missing.push("main.js PluginService enable flag");
+  }
+  if (!mainJs.includes(JSON.stringify(`${packageId}.PluginService`))) {
+    missing.push(`main.js PluginService id ${packageId}.PluginService`);
+  }
+
+  const engineFsFile = zip.files["services/tizen/enginefs-service.js"];
+  if (engineFsFile && !/require\(["']\.\/plugin-service\.js["']\)/.test(await engineFsFile.async("string"))) {
+    missing.push("EngineFS PluginService compatibility host");
+  }
+
+  if (missing.length > 0) {
+    throw new Error(`Samsung WGT is missing the local Tizen Plugin Web Service contract: ${missing.join(", ")}.`);
+  }
+
+  emit(event, { type: "info", text: "Samsung WGT includes the local Tizen Plugin Web Service contract." });
+}
+
 async function normalizeSamsungPackageMetadata(event, packagePath) {
   const targetPackageId = String(config.tizen.packageId || "").trim();
   const targetAppId = String(config.tizen.appId || "").trim();
@@ -1845,6 +1924,7 @@ async function prepareSamsungPackage(event, transport, packagePath, options = {}
   const metadata = await parseTizenPackageMetadata(packagePath);
   await validateSamsungPlatformVersion(event, transport, metadata.requiredVersion);
   await validateSamsungEngineFsWebServicePackage(event, packagePath);
+  await validateSamsungPluginWebServicePackage(event, packagePath);
   const certificateSelection = await getSamsungCertificateCandidates(event, transport, options);
   return { packagePath, ...certificateSelection };
 }
