@@ -1691,6 +1691,14 @@ async function validateSamsungPluginWebServicePackage(event, packagePath) {
   const application = doc.getElementsByTagName("tizen:application")[0]
     || doc.getElementsByTagNameNS("http://tizen.org/ns/widgets", "application")[0];
   const packageId = application?.getAttribute("package") || "";
+  const appId = application?.getAttribute("id") || "";
+  // The direct package builder historically declares service ids from the
+  // package id, while the Apps2Samsung/wrapper path used the application id.
+  // Both are valid package variants; require the id declared by this WGT and
+  // keep main.js aligned with that exact declaration.
+  const pluginServiceIds = Array.from(new Set(
+    [packageId, appId].filter(Boolean).map((baseId) => `${baseId}.PluginService`)
+  ));
   const features = elementsByTagName(doc, "feature", "http://www.w3.org/ns/widgets", "feature");
   if (!features.some((feature) => feature.getAttribute("name") === "http://tizen.org/feature/web.service")) {
     missing.push("config.xml feature http://tizen.org/feature/web.service");
@@ -1702,13 +1710,13 @@ async function validateSamsungPluginWebServicePackage(event, packagePath) {
   }
 
   const services = elementsByTagName(doc, "tizen:service", "http://tizen.org/ns/widgets", "service");
-  const hasPluginService = services.some((service) => {
+  const declaredPluginService = services.find((service) => {
     const contents = elementsByTagName(service, "tizen:content", "http://tizen.org/ns/widgets", "content");
-    return service.getAttribute("id") === `${packageId}.PluginService`
+    return pluginServiceIds.includes(service.getAttribute("id"))
       && contents.some((content) => content.getAttribute("src") === "services/tizen/plugin-service.js");
   });
-  if (!hasPluginService) {
-    missing.push(`config.xml tizen:service -> ${packageId}.PluginService`);
+  if (!declaredPluginService) {
+    missing.push(`config.xml tizen:service -> ${pluginServiceIds.join(" or ") || "<application>.PluginService"}`);
   }
 
   if (!/<script\s+type=["']module["']\s+src=["']services\/tizen\/wrt-service-bridge\.js["']/i.test(
@@ -1719,13 +1727,14 @@ async function validateSamsungPluginWebServicePackage(event, packagePath) {
   if (!/__NUVIO_TIZEN_PLUGIN_SERVICE_ENABLED__\s*=\s*true\b/.test(mainJs)) {
     missing.push("main.js PluginService enable flag");
   }
-  if (!mainJs.includes(JSON.stringify(`${packageId}.PluginService`))) {
-    missing.push(`main.js PluginService id ${packageId}.PluginService`);
+  const declaredPluginServiceId = declaredPluginService?.getAttribute("id") || "";
+  if (!pluginServiceIds.some((serviceId) => mainJs.includes(JSON.stringify(serviceId)))) {
+    missing.push(`main.js PluginService id ${declaredPluginServiceId || pluginServiceIds.join(" or ")}`);
   }
 
   const engineFsFile = zip.files["services/tizen/enginefs-service.js"];
-  if (engineFsFile && !/require\(["']\.\/plugin-service\.js["']\)/.test(await engineFsFile.async("string"))) {
-    missing.push("EngineFS PluginService compatibility host");
+  if (engineFsFile && /require\(["']\.\/plugin-service\.js["']\)/.test(await engineFsFile.async("string"))) {
+    missing.push("independent EngineFS and PluginService lifecycles");
   }
 
   if (missing.length > 0) {
