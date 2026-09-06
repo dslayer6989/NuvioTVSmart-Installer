@@ -24,6 +24,17 @@ const legacyUserDataNames = ["Nuvio WebTV Installer"];
 const isWindows = process.platform === "win32";
 const appIconPath = path.join(__dirname, "..", "build", "icon.png");
 const adbCommands = AdbPacket.commands;
+const tizenEngineFsServicePath = "services/tizen/enginefs-service.js";
+const tizenEngineFsRuntimePaths = [
+  "services/tizen/runtime/media-http.cjs",
+  "services/tizen/runtime/tx3g-subtitle-parser.cjs",
+  "services/tizen/runtime/tx3g-subtitle-service.cjs",
+  "services/tizen/runtime/embedded-text-subtitle-parser.cjs"
+];
+const tizenEngineFsServicePort = 2710;
+const tizenPluginServicePath = "services/tizen/plugin-service.js";
+const tizenPluginServiceSourcePath = "services/plugin-http.cjs";
+const tizenPluginServicePort = 2711;
 let migratedLegacySamsungCertificateCount = 0;
 
 app.setName(appDisplayName);
@@ -1613,20 +1624,35 @@ function elementsByTagName(doc, tagName, namespaceUri, localName) {
 async function validateSamsungEngineFsWebServicePackage(event, packagePath) {
   const zip = await JSZip.loadAsync(fs.readFileSync(packagePath));
   const configFile = zip.files["config.xml"];
+  const mainFile = zip.files["main.js"];
   const missing = [];
 
   if (!configFile) {
     throw new Error("Invalid Samsung WGT: config.xml is missing.");
   }
 
-  [
-    "services/tizen/enginefs-service.js",
-    "services/tizen/runtime/media-http.cjs"
-  ].forEach((filename) => {
+  if (!mainFile || mainFile.dir) {
+    missing.push("main.js");
+  }
+
+  [tizenEngineFsServicePath, ...tizenEngineFsRuntimePaths].forEach((filename) => {
     if (!zip.files[filename] || zip.files[filename].dir) {
       missing.push(filename);
     }
   });
+
+  const engineFsServiceEntry = zip.files[tizenEngineFsServicePath];
+  const engineFsServiceSource = engineFsServiceEntry && !engineFsServiceEntry.dir
+    ? await engineFsServiceEntry.async("string")
+    : "";
+  if (!new RegExp(
+    `process\\.env\\.PORT\\s*=\\s*process\\.env\\.PORT\\s*\\|\\|\\s*["']${tizenEngineFsServicePort}["']`
+  ).test(engineFsServiceSource)) {
+    missing.push(`EngineFS fixed port ${tizenEngineFsServicePort}`);
+  }
+  if (/11470|11471|FALLBACK_PORT|candidateIndex/.test(engineFsServiceSource)) {
+    missing.push("EngineFS fallback port logic");
+  }
 
   const xml = await configFile.async("string");
   const doc = new DOMParser().parseFromString(xml, "text/xml");
@@ -1642,11 +1668,11 @@ async function validateSamsungEngineFsWebServicePackage(event, packagePath) {
   const services = elementsByTagName(doc, "tizen:service", "http://tizen.org/ns/widgets", "service");
   const hasEngineFsService = services.some((service) => {
     const contents = elementsByTagName(service, "tizen:content", "http://tizen.org/ns/widgets", "content");
-    return contents.some((content) => content.getAttribute("src") === "services/tizen/enginefs-service.js");
+    return contents.some((content) => content.getAttribute("src") === tizenEngineFsServicePath);
   });
 
   if (!hasEngineFsService) {
-    missing.push("config.xml tizen:service -> services/tizen/enginefs-service.js");
+    missing.push(`config.xml tizen:service -> ${tizenEngineFsServicePath}`);
   }
 
   if (missing.length > 0) {
@@ -1660,45 +1686,51 @@ async function validateSamsungPluginWebServicePackage(event, packagePath) {
   const zip = await JSZip.loadAsync(fs.readFileSync(packagePath));
   const configFile = zip.files["config.xml"];
   const mainFile = zip.files["main.js"];
-  if (!configFile || !mainFile) {
-    return;
+  if (!configFile || !mainFile || mainFile.dir) {
+    throw new Error("Invalid Samsung WGT: config.xml and main.js are required for local Tizen services.");
   }
 
   const mainJs = await mainFile.async("string");
-  const hasPluginFiles = [
-    "services/tizen/plugin-service.js",
-    "services/plugin-http.cjs",
-    "services/tizen/wrt-service-bridge.js"
-  ].some((filename) => zip.files[filename] && !zip.files[filename].dir);
+  const pluginBridgePath = "services/tizen/wrt-service-bridge.js";
+  const pluginServiceEntry = zip.files[tizenPluginServicePath];
+  const pluginHttpEntry = zip.files[tizenPluginServiceSourcePath];
+  const pluginBridgeEntry = zip.files[pluginBridgePath];
+  const hasPluginFiles = [pluginServiceEntry, pluginHttpEntry].some(
+    (entry) => entry && !entry.dir
+  );
+  const hasLegacyPluginBridge = pluginBridgeEntry && !pluginBridgeEntry.dir;
   const pluginEnabled = /__NUVIO_TIZEN_PLUGIN_SERVICE_ENABLED__\s*=\s*true\b/.test(mainJs);
-  if (!pluginEnabled && !hasPluginFiles) {
+  if (!pluginEnabled && !hasPluginFiles && !hasLegacyPluginBridge) {
     return;
   }
 
   const missing = [];
-  [
-    "services/tizen/plugin-service.js",
-    "services/plugin-http.cjs",
-    "services/tizen/wrt-service-bridge.js"
-  ].forEach((filename) => {
-    if (!zip.files[filename] || zip.files[filename].dir) {
-      missing.push(filename);
-    }
-  });
+  if (!pluginServiceEntry || pluginServiceEntry.dir) {
+    missing.push(tizenPluginServicePath);
+  }
+
+  const pluginServiceSource = pluginServiceEntry && !pluginServiceEntry.dir
+    ? await pluginServiceEntry.async("string")
+    : "";
+  if (!pluginHttpEntry || pluginHttpEntry.dir) {
+    missing.push(tizenPluginServiceSourcePath);
+  }
+  if (!pluginServiceSource.includes('require("../plugin-http.cjs")')) {
+    missing.push("PluginService canonical relative plugin-http loader");
+  }
+  if (!pluginServiceSource.includes(`var DEFAULT_PORT = ${tizenPluginServicePort};`)) {
+    missing.push(`PluginService fixed port ${tizenPluginServicePort}`);
+  }
+  if (/11470|11471|FALLBACK_PORT|candidateIndex/.test(pluginServiceSource)) {
+    missing.push("PluginService fallback port logic");
+  }
 
   const xml = await configFile.async("string");
   const doc = new DOMParser().parseFromString(xml, "text/xml");
   const application = doc.getElementsByTagName("tizen:application")[0]
     || doc.getElementsByTagNameNS("http://tizen.org/ns/widgets", "application")[0];
   const packageId = application?.getAttribute("package") || "";
-  const appId = application?.getAttribute("id") || "";
-  // The direct package builder historically declares service ids from the
-  // package id, while the Apps2Samsung/wrapper path used the application id.
-  // Both are valid package variants; require the id declared by this WGT and
-  // keep main.js aligned with that exact declaration.
-  const pluginServiceIds = Array.from(new Set(
-    [packageId, appId].filter(Boolean).map((baseId) => `${baseId}.PluginService`)
-  ));
+  const pluginServiceId = packageId ? `${packageId}.PluginService` : "";
   const features = elementsByTagName(doc, "feature", "http://www.w3.org/ns/widgets", "feature");
   if (!features.some((feature) => feature.getAttribute("name") === "http://tizen.org/feature/web.service")) {
     missing.push("config.xml feature http://tizen.org/feature/web.service");
@@ -1712,27 +1744,41 @@ async function validateSamsungPluginWebServicePackage(event, packagePath) {
   const services = elementsByTagName(doc, "tizen:service", "http://tizen.org/ns/widgets", "service");
   const declaredPluginService = services.find((service) => {
     const contents = elementsByTagName(service, "tizen:content", "http://tizen.org/ns/widgets", "content");
-    return pluginServiceIds.includes(service.getAttribute("id"))
-      && contents.some((content) => content.getAttribute("src") === "services/tizen/plugin-service.js");
+    return service.getAttribute("id") === pluginServiceId
+      && contents.some((content) => content.getAttribute("src") === tizenPluginServicePath);
   });
   if (!declaredPluginService) {
-    missing.push(`config.xml tizen:service -> ${pluginServiceIds.join(" or ") || "<application>.PluginService"}`);
+    missing.push(`config.xml tizen:service -> ${pluginServiceId || "<package>.PluginService"}`);
   }
 
-  if (!/<script\s+type=["']module["']\s+src=["']services\/tizen\/wrt-service-bridge\.js["']/i.test(
-    await zip.files["index.html"]?.async("string") || ""
-  )) {
+  const indexHtml = await zip.files["index.html"]?.async("string") || "";
+  const hasInlineWrtServiceBridge = /<script\b[^>]*\btype=["']module["'][^>]*>[\s\S]*?\bimport\s+\*\s+as\s+service\s+from\s+["']wrt:service["']\s*;?/i.test(indexHtml);
+  if (!hasInlineWrtServiceBridge) {
     missing.push("index.html wrt:service module bridge");
+  }
+  if (pluginBridgeEntry && !pluginBridgeEntry.dir) {
+    missing.push(`${pluginBridgePath} must not be packaged; use the inline wrt:service bridge`);
   }
   if (!/__NUVIO_TIZEN_PLUGIN_SERVICE_ENABLED__\s*=\s*true\b/.test(mainJs)) {
     missing.push("main.js PluginService enable flag");
   }
   const declaredPluginServiceId = declaredPluginService?.getAttribute("id") || "";
-  if (!pluginServiceIds.some((serviceId) => mainJs.includes(JSON.stringify(serviceId)))) {
-    missing.push(`main.js PluginService id ${declaredPluginServiceId || pluginServiceIds.join(" or ")}`);
+  if (!pluginServiceId || !mainJs.includes(JSON.stringify(pluginServiceId))) {
+    missing.push(`main.js PluginService id ${declaredPluginServiceId || pluginServiceId || "<package>.PluginService"}`);
   }
 
-  const engineFsFile = zip.files["services/tizen/enginefs-service.js"];
+  for (const obsoletePath of [
+    "services/tizen/plugin-http.cjs",
+    "assets/libs/quickjs-emscripten-legacy.global.js",
+    "assets/libs/quickjs-emscripten-legacy.LICENSE"
+  ]) {
+    const obsoleteEntry = zip.files[obsoletePath];
+    if (obsoleteEntry && !obsoleteEntry.dir) {
+      missing.push(`${obsoletePath} must not be packaged`);
+    }
+  }
+
+  const engineFsFile = zip.files[tizenEngineFsServicePath];
   if (engineFsFile && /require\(["']\.\/plugin-service\.js["']\)/.test(await engineFsFile.async("string"))) {
     missing.push("independent EngineFS and PluginService lifecycles");
   }
@@ -1741,7 +1787,10 @@ async function validateSamsungPluginWebServicePackage(event, packagePath) {
     throw new Error(`Samsung WGT is missing the local Tizen Plugin Web Service contract: ${missing.join(", ")}.`);
   }
 
-  emit(event, { type: "info", text: "Samsung WGT includes the local Tizen Plugin Web Service contract." });
+  emit(event, {
+    type: "info",
+    text: "Samsung WGT includes the canonical local Tizen Plugin Web Service contract (external helper and inline wrt:service bridge)."
+  });
 }
 
 async function normalizeSamsungPackageMetadata(event, packagePath) {
