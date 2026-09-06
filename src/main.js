@@ -452,8 +452,23 @@ function lgDeviceInfoArgs(host) {
   ];
 }
 
+function getWebOsCliDataDirectory() {
+  // @webos-tools/cli resolves its data directory from APPDATA first on
+  // Windows, then HOME/USERPROFILE. Mirror that resolution so the installer
+  // reads and updates the same novacom-devices.json as ares-setup-device.
+  const cliHome = process.env.APPDATA || process.env.HOME || process.env.USERPROFILE || os.homedir();
+  return path.resolve(cliHome, ".webos", "tv");
+}
+
+function getWebOsCliSshDirectory() {
+  // ares-novacom resolves SSH keys from HOME/USERPROFILE, independently of
+  // the CLI data directory. Keep key discovery aligned with that behavior.
+  const cliHome = process.env.HOME || process.env.USERPROFILE || os.homedir();
+  return path.resolve(cliHome, ".ssh");
+}
+
 async function readLgDevices() {
-  const devicesPath = path.join(os.homedir(), ".webos", "tv", "novacom-devices.json");
+  const devicesPath = path.join(getWebOsCliDataDirectory(), "novacom-devices.json");
 
   try {
     const devices = JSON.parse(await fsp.readFile(devicesPath, "utf8"));
@@ -476,7 +491,7 @@ async function listRegisteredLgDevices() {
     let keyReady = false;
     if (privateKey) {
       try {
-        await fsp.access(path.join(os.homedir(), ".ssh", privateKey), fs.constants.R_OK);
+        await fsp.access(path.join(getWebOsCliSshDirectory(), privateKey), fs.constants.R_OK);
         keyReady = true;
       } catch {}
     }
@@ -538,7 +553,7 @@ async function findExistingLgDeviceWithPrivateKey(deviceName, host, options = {}
     return null;
   }
 
-  const keyPath = path.join(os.homedir(), ".ssh", device.privateKey.openSsh);
+  const keyPath = path.join(getWebOsCliSshDirectory(), device.privateKey.openSsh);
   try {
     await fsp.access(keyPath, fs.constants.R_OK);
     return {
