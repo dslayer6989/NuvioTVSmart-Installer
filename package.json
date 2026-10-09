@@ -58,10 +58,10 @@
     "mac": {
       "icon": "icon.icns",
       "target": [
-        {
-          "target": "dir"
-        }
-      ]
+        "dmg",
+        "zip"
+      ],
+      "artifactName": "NuvioTVSmart-Installer-${version}-macOS.${ext}"
     },
     "linux": {
       "icon": "icon.png",
